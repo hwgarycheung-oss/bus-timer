@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KMB Live Dashboard</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f4; padding: 20px; }
+        .container { display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; }
+        .card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: 320px; overflow: hidden; }
+        .header { background: #d32f2f; color: white; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; }
+        .bus-row { padding: 12px 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+        .bus-row:last-child { border-bottom: none; }
+        .countdown { font-weight: bold; color: #2e7d32; font-size: 1.1rem; }
+        .meta { font-size: 0.75rem; color: #888; }
+        .updated { text-align: center; margin-top: 20px; font-size: 0.8rem; color: #999; }
+    </style>
+</head>
+<body>
+
+    <div class="container" id="display"></div>
+    <div class="updated" id="time">Connecting...</div>
+
+    <script>
+        const config = [
+            {
+                url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/1AB800949FF1203B/278K/1',
+                filterSeq1: true
+            },
+            {
+                url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/E960E8842F9C633D/78K/1',
+                filterSeq1: false
+            },
+            {
+                url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/E960E8842F9C633D/79K/1',
+                filterSeq1: false
+            }
+        ];
+
+        async function getData() {
+            const display = document.getElementById('display');
+            let html = '';
+
+            for (const item of config) {
+                try {
+                    const res = await fetch(item.url);
+                    const json = await res.json();
+                    let data = json.data || [];
+
+                    // Apply "seq: 1" filter ONLY for the first URL (278K)
+                    if (item.filterSeq1) {
+                        data = data.filter(d => d.seq === 1);
+                    }
+
+                    if (data.length > 0) {
+                        const route = data[0].route;
+                        const dest = data[0].dest_tc;
+
+                        let cardHtml = `
+                            <div class="card">
+                                <div class="header">
+                                    <strong>${route}</strong>
+                                    <span style="font-size:0.8rem">往 ${dest}</span>
+                                </div>
+                        `;
+
+                        data.forEach(bus => {
+                            const diff = bus.eta ? Math.floor((new Date(bus.eta) - new Date()) / 1000 / 60) : '--';
+                            const etaShow = diff <= 0 ? "Arriving" : diff + " min";
+                            
+                            cardHtml += `
+                                <div class="bus-row">
+                                    <div>
+                                        <div>Seq: ${bus.eta_seq}</div>
+                                        <div class="meta">Stop Seq: ${bus.seq}</div>
+                                    </div>
+                                    <div style="text-align:right">
+                                        <div class="countdown">${etaShow}</div>
+                                        <div class="meta">${bus.eta ? new Date(bus.eta).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</div>
+                                    </div>
+                                </div>
+                            `;
+                        });
+
+                        cardHtml += `</div>`;
+                        html += cardHtml;
+                    }
+                } catch (e) {
+                    console.error("Error loading " + item.url, e);
+                }
+            }
+
+            display.innerHTML = html || "No bus data found.";
+            document.getElementById('time').innerText = "Last Update: " + new Date().toLocaleTimeString();
+        }
+
+        getData();
+        setInterval(getData, 20000);
+    </script>
+</body>
+</html>
