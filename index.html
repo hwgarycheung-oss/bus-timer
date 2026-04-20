@@ -3,99 +3,174 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KMB Live Dashboard</title>
+    <title>HK Dashboard</title>
     <style>
-        body { font-family: sans-serif; background: #f4f4f4; padding: 20px; }
+        body { font-family: -apple-system, sans-serif; background: #f4f4f4; padding: 15px; margin: 0; }
         .container { display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; }
+        
+        .weather-card { 
+            background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
+            width: 100%; max-width: 550px; margin: 0 auto 20px; padding: 20px; text-align: center;
+        }
+
+        /* Weather Info Styling */
+        .weather-desc { font-size: 0.95rem; color: #444; margin-bottom: 15px; line-height: 1.4; }
+        .temp-row { display: flex; justify-content: space-around; margin: 15px 0; }
+        .temp-box { text-align: center; }
+        .temp-val { font-weight: bold; color: #d32f2f; display: block; font-size: 1.6rem; }
+        .temp-label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+
+        /* Radar Styling */
+        .radar-img { width: 100%; max-width: 512px; border-radius: 6px; background: #000; min-height: 300px; }
+        .radar-label { margin-top: 8px; font-weight: bold; font-size: 0.9rem; }
+
+        /* Bus Styling */
         .card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: 320px; overflow: hidden; }
-        .header { background: #d32f2f; color: white; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; }
+        .header { background: #d32f2f; color: white; padding: 10px 15px; display: flex; justify-content: space-between; }
         .bus-row { padding: 12px 15px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
-        .bus-row:last-child { border-bottom: none; }
-        .countdown { font-weight: bold; color: #2e7d32; font-size: 1.1rem; }
-        .meta { font-size: 0.75rem; color: #888; }
+        .countdown { font-weight: bold; color: #2e7d32; }
         .updated { text-align: center; margin-top: 20px; font-size: 0.8rem; color: #999; }
     </style>
 </head>
 <body>
 
+    <div class="weather-card">
+        <div id="weather-text" class="weather-desc">正在獲取天氣預報...</div>
+        
+        <div class="temp-row">
+            <div class="temp-box">
+                <span class="temp-label">現時</span>
+                <span id="curr-temp" class="temp-val">--°C</span>
+            </div>
+            <div class="temp-box">
+                <span class="temp-label">最低</span>
+                <span id="low-temp" class="temp-val">--°C</span>
+            </div>
+            <div class="temp-box">
+                <span class="temp-label">最高</span>
+                <span id="high-temp" class="temp-val">--°C</span>
+            </div>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+
+        <div style="margin-bottom:10px; font-weight: bold;">128公里雷達影像</div>
+        <img id="radar-screen" class="radar-img" src="" alt="雷達圖加載中...">
+    </div>
+
     <div class="container" id="display"></div>
-    <div class="updated" id="time">Connecting...</div>
+    <div class="updated" id="time">最後更新: --:--</div>
 
     <script>
-        const config = [
-            {
-                url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/1AB800949FF1203B/278K/1',
-                filterSeq1: true
-            },
-            {
-                url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/E960E8842F9C633D/78K/1',
-                filterSeq1: false
-            },
-            {
-                url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/E960E8842F9C633D/79K/1',
-                filterSeq1: false
+        // --- 1. Weather Data Logic ---
+        async function updateWeather() {
+            try {
+                // Fetch current temperature and description
+                const rhr = await fetch('https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=tc').then(r => r.json());
+                const flw = await fetch('https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=flw&lang=tc').then(r => r.json());
+                const fnd = await fetch('https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=tc').then(r => r.json());
+
+                // Update current temp (usually index 0 is HKO station)
+                if (rhr.temperature && rhr.temperature.data.length > 0) {
+                    document.getElementById('curr-temp').innerText = rhr.temperature.data[0].value + "°C";
+                }
+
+                // Update text description
+                document.getElementById('weather-text').innerText = flw.forecastDesc || "暫無預報內容";
+
+                // Update High/Low from the first day of 9-day forecast
+                if (fnd.weatherForecast && fnd.weatherForecast.length > 0) {
+                    const today = fnd.weatherForecast[0];
+                    document.getElementById('low-temp').innerText = today.forecastMintemp.value + "°C";
+                    document.getElementById('high-temp').innerText = today.forecastMaxtemp.value + "°C";
+                }
+            } catch (e) {
+                console.error("Weather error", e);
             }
+        }
+
+        // --- 2. Radar Logic (10 frames) ---
+        let radarFrames = [];
+        let radarIdx = 0;
+
+        function updateRadarList() {
+            const now = new Date();
+            // Start 18 mins back for availability
+            let base = new Date(Math.floor(now.getTime() / 360000) * 360000 - (18 * 60000));
+            
+            const newFrames = [];
+            for (let i = 0; i < 10; i++) {
+                let frameTime = new Date(base.getTime() - (i * 360000));
+                let hkt = new Date(frameTime.getTime() + (8 * 60 * 60000));
+                
+                const ts = hkt.getUTCFullYear() + 
+                           String(hkt.getUTCMonth() + 1).padStart(2, '0') + 
+                           String(hkt.getUTCDate()).padStart(2, '0') + 
+                           String(hkt.getUTCHours()).padStart(2, '0') + 
+                           String(hkt.getUTCMinutes()).padStart(2, '0');
+
+                newFrames.unshift({
+                    url: `https://www.weather.gov.hk/wxinfo/radars/rad_128_png/2d128nradar_${ts}.jpg`,
+                    label: String(hkt.getUTCHours()).padStart(2, '0') + ":" + String(hkt.getUTCMinutes()).padStart(2, '0')
+                });
+            }
+            radarFrames = newFrames;
+        }
+
+        function playRadar() {
+            if (radarFrames.length === 0) return;
+            radarIdx = (radarIdx + 1) % radarFrames.length;
+            const img = document.getElementById('radar-screen');
+            const label = document.getElementById('radar-time');
+            
+            const temp = new Image();
+            temp.onload = () => {
+                img.src = radarFrames[radarIdx].url;
+                label.innerText = radarFrames[radarIdx].label;
+            };
+            temp.src = radarFrames[radarIdx].url;
+        }
+
+        // --- 3. Bus Logic ---
+        const config = [
+            { url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/1AB800949FF1203B/278K/1', filterSeq1: true },
+            { url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/E960E8842F9C633D/78K/1', filterSeq1: false },
+            { url: 'https://data.etabus.gov.hk/v1/transport/kmb/eta/E960E8842F9C633D/79K/1', filterSeq1: false }
         ];
 
-        async function getData() {
+        async function updateBus() {
             const display = document.getElementById('display');
             let html = '';
-
             for (const item of config) {
                 try {
                     const res = await fetch(item.url);
                     const json = await res.json();
                     let data = json.data || [];
-
-                    // Apply "seq: 1" filter ONLY for the first URL (278K)
-                    if (item.filterSeq1) {
-                        data = data.filter(d => d.seq === 1);
-                    }
+                    if (item.filterSeq1) data = data.filter(d => d.seq === 1);
 
                     if (data.length > 0) {
-                        const route = data[0].route;
-                        const dest = data[0].dest_tc;
-
-                        let cardHtml = `
-                            <div class="card">
-                                <div class="header">
-                                    <strong>${route}</strong>
-                                    <span style="font-size:0.8rem">往 ${dest}</span>
-                                </div>
-                        `;
-
+                        let card = `<div class="card"><div class="header"><strong>${data[0].route}</strong><span>往 ${data[0].dest_tc}</span></div>`;
                         data.forEach(bus => {
-                            const diff = bus.eta ? Math.floor((new Date(bus.eta) - new Date()) / 1000 / 60) : '--';
-                            const etaShow = diff <= 0 ? "Arriving" : diff + " min";
-                            
-                            cardHtml += `
-                                <div class="bus-row">
-                                    <div>
-                                        <div>Seq: ${bus.eta_seq}</div>
-                                        <div class="meta">Stop Seq: ${bus.seq}</div>
-                                    </div>
-                                    <div style="text-align:right">
-                                        <div class="countdown">${etaShow}</div>
-                                        <div class="meta">${bus.eta ? new Date(bus.eta).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</div>
-                                    </div>
-                                </div>
-                            `;
+                            const diff = bus.eta ? Math.floor((new Date(bus.eta) - new Date()) / 60000) : '--';
+                            card += `<div class="bus-row"><div>Seq: ${bus.eta_seq}</div><div class="countdown">${diff <= 0 ? "Arriving" : diff + " min"}</div></div>`;
                         });
-
-                        cardHtml += `</div>`;
-                        html += cardHtml;
+                        html += card + `</div>`;
                     }
-                } catch (e) {
-                    console.error("Error loading " + item.url, e);
-                }
+                } catch (e) { console.error(e); }
             }
-
-            display.innerHTML = html || "No bus data found.";
-            document.getElementById('time').innerText = "Last Update: " + new Date().toLocaleTimeString();
+            display.innerHTML = html;
+            document.getElementById('time').innerText = "最後更新: " + new Date().toLocaleTimeString();
         }
 
-        getData();
-        setInterval(getData, 20000);
+        // --- Init ---
+        updateWeather();
+        updateRadarList();
+        updateBus();
+
+        setInterval(playRadar, 800);
+        setInterval(updateWeather, 1800000); // 30 min
+        setInterval(updateRadarList, 360000); // 6 min
+        setInterval(updateBus, 60000);        // 1 min
     </script>
 </body>
 </html>
